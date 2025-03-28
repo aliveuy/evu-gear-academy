@@ -161,7 +161,6 @@ extern "C" fn handle_reply() {
     session.session_status = SessionStatus::MessageReceived(event);
 
     if let Some((_, original_message_id)) = session.msg_ids {
-
         let _ = exec::wake(original_message_id);
     }
 }
