@@ -1,7 +1,7 @@
 #![no_std]
 #![allow(static_mut_refs)]
 use game_session_io::*;
-use gstd::{debug, exec, msg, prelude::*};
+use gstd::{debug, exec, msg, prelude::*, ActorId};
 use wordle_io::*;
 
 static mut SESSION: Option<Session> = None;
@@ -39,7 +39,7 @@ extern "C" fn handle() {
                 session.session_status = SessionStatus::MessageSent;
                 exec::wait();
             }
-            SessionAction::CheckWord { user, word } => {
+            SessionAction::CheckWord { user, ref word } => {
                 debug!("===CHECK WORD FOR USER: {:?}===", user);
 
                 if session.guess_count >= 6 {
@@ -51,7 +51,6 @@ extern "C" fn handle() {
                     return;
                 }
 
-                session.guess_count += 1;
                 let current_game_status = get_game_status();
 
                 if current_game_status.game_result.is_some() {
@@ -72,22 +71,9 @@ extern "C" fn handle() {
                     exec::wait();
                 }
             }
-            SessionAction::CheckGameStatus { user: _ } => {
+            SessionAction::CheckGameStatus { user } => {
                 debug!("===CHECK GAME STATUS===");
-                let current_block = exec::block_height() as u64;
-
-                if current_block >= (session.start_block + 200).into() {
-                    session.session_status = SessionStatus::GameEnded {
-                        result: GameResult::Lose,
-                    };
-                    let current_game_status = get_game_status();
-                    msg::reply(SessionEvent::GameStatus(current_game_status.clone()), 0)
-                        .expect("Unable to reply");
-                } else {
-                    let current_game_status = get_game_status();
-                    msg::reply(SessionEvent::GameStatus(current_game_status.clone()), 0)
-                        .expect("Unable to reply");
-                }
+                check_game_status(session, user);
             }
         },
         SessionStatus::MessageSent => {
@@ -119,6 +105,7 @@ extern "C" fn handle() {
                     ref contained_in_word,
                 } => {
                     let mut current_game_status = get_game_status();
+                    session.guess_count += 1;
                     if correct_positions.len() == 5 {
                         current_game_status.game_result = Some(GameResult::Win);
                         session_event = SessionEvent::GameStatus(current_game_status.clone());
@@ -149,6 +136,12 @@ extern "C" fn handle() {
             msg::reply(SessionEvent::GameStatus(get_game_status()), 0).expect("Unable to reply");
         }
     };
+
+    // Handle CheckGameStatus action (in any state)
+    if let SessionAction::CheckGameStatus { user } = &action {
+        debug!("===CHECK GAME STATUS (ANY STATE)===");
+        check_game_status(session, *user);
+    }
 }
 
 #[no_mangle]
@@ -158,9 +151,8 @@ extern "C" fn handle_reply() {
 
     let event: Event = msg::load().expect("Unable to decode `Event`");
 
-    session.session_status = SessionStatus::MessageReceived(event);
-
     if let Some((_, original_message_id)) = session.msg_ids {
+        session.session_status = SessionStatus::MessageReceived(event);
         let _ = exec::wake(original_message_id);
     }
 }
@@ -177,5 +169,39 @@ fn get_game_status() -> GameStatus {
             .as_ref()
             .map(|s| s.game_status.clone())
             .expect("Game status is not initialized")
+    }
+}
+
+fn check_game_status(session: &mut Session, user: ActorId) {
+    if msg::source() != exec::program_id() {
+        msg::reply(
+            SessionEvent::GameError("Only the program can check game status".into()),
+            0,
+        )
+        .expect("Unable to reply");
+        return;
+    }
+
+    let current_block = exec::block_height() as u64;
+
+    if current_block >= (session.start_block + 200).into() {
+        session.session_status = SessionStatus::GameEnded {
+            result: GameResult::Lose,
+        };
+        let current_game_status = get_game_status();
+        msg::send(
+            user,
+            SessionEvent::GameStatus(current_game_status.clone()),
+            0,
+        )
+        .expect("Unable to send message to player");
+    } else {
+        let current_game_status = get_game_status();
+        msg::send(
+            user,
+            SessionEvent::GameStatus(current_game_status.clone()),
+            0,
+        )
+        .expect("Unable to send message to player");
     }
 }
