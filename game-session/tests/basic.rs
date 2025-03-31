@@ -97,7 +97,7 @@ fn test_timeout() {
         },
     );
     system.run_next_block();
-    system.run_to_block(201);
+    system.run_to_block(300);
 
     proxy_program.send(USER1, SessionAction::CheckGameStatus { user: USER1.into() });
     system.run_next_block();
